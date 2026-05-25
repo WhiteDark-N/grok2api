@@ -115,6 +115,9 @@ def build_console_payload(
     top_p: float = 0.95,
     reasoning_effort: str | None = None,
     stream: bool = True,
+    tools: list[dict[str, Any]] | None = None,
+    tool_choice: Any = None,
+    web_search: bool | None = None,
 ) -> dict[str, Any]:
     """Build the JSON payload for POST console.x.ai/v1/responses.
 
@@ -181,13 +184,42 @@ def build_console_payload(
     if console_model in _MODELS_WITH_REASONING_FIELD:
         payload["reasoning"] = {"effort": effort}
 
-    # 为 multi-agent 和支持搜索的模型添加 tools
-    if console_model in _MODELS_WITH_SEARCH_TOOLS:
-        payload["tools"] = [
+    tools_provided = tools is not None
+    merged_tools: list[dict[str, Any]] = []
+    for t in tools or []:
+        if not isinstance(t, dict):
+            continue
+        if t.get("type") == "function" and isinstance(t.get("function"), dict):
+            fn = t.get("function") or {}
+            merged_tools.append(
+                {
+                    "type": "function",
+                    "name": fn.get("name", ""),
+                    "description": fn.get("description", ""),
+                    "parameters": fn.get("parameters"),
+                }
+            )
+        else:
+            merged_tools.append(t)
+    if web_search and console_model in _MODELS_WITH_SEARCH_TOOLS:
+        has_web = any(isinstance(t, dict) and t.get("type") == "web_search" for t in merged_tools)
+        has_x = any(isinstance(t, dict) and t.get("type") == "x_search" for t in merged_tools)
+        if not has_web:
+            merged_tools.append({"type": "web_search", "enable_image_understanding": True})
+        if not has_x:
+            merged_tools.append({"type": "x_search", "enable_video_understanding": True})
+    elif (not tools_provided) and console_model in _MODELS_WITH_SEARCH_TOOLS:
+        merged_tools = [
             {"type": "web_search", "enable_image_understanding": True},
             {"type": "x_search", "enable_video_understanding": True},
         ]
-        payload["tool_choice"] = "auto"
+
+    if merged_tools:
+        payload["tools"] = merged_tools
+        if tool_choice is not None:
+            payload["tool_choice"] = tool_choice
+        elif web_search:
+            payload["tool_choice"] = "auto"
 
     logger.debug(
         "console payload built: model={} console_model={} input_items={} has_reasoning={}",
@@ -207,12 +239,13 @@ class ConsoleStreamAdapter:
     response.completed 事件用于提取 usage 统计。
     """
 
-    __slots__ = ("text_buf", "usage", "_done")
+    __slots__ = ("text_buf", "usage", "_done", "tool_calls")
 
     def __init__(self) -> None:
         self.text_buf: list[str] = []
         self.usage: dict[str, Any] | None = None
         self._done = False
+        self.tool_calls: list[dict[str, str]] = []
 
     def feed(self, event_type: str, data: str) -> list[str]:
         """解析一个 SSE 事件，返回文本 token 列表（通常 0 或 1 个）。"""
@@ -233,6 +266,25 @@ class ConsoleStreamAdapter:
         elif event_type == "response.completed":
             resp = obj.get("response", {})
             self.usage = resp.get("usage")
+            output_items = resp.get("output") or []
+            calls: list[dict[str, str]] = []
+            for item in output_items:
+                if not isinstance(item, dict):
+                    continue
+                if item.get("type") != "function_call":
+                    continue
+                name = str(item.get("name", "")).strip()
+                if not name:
+                    continue
+                args = item.get("arguments")
+                calls.append(
+                    {
+                        "id": str(item.get("call_id") or item.get("id") or ""),
+                        "name": name,
+                        "arguments": args if isinstance(args, str) else "{}",
+                    }
+                )
+            self.tool_calls = calls
             self._done = True
 
         elif event_type == "error":

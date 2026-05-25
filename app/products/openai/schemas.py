@@ -37,6 +37,7 @@ class ChatCompletionRequest(BaseModel):
     video_config:        VideoConfig | None         = None
     tools:               list[dict[str, Any]] | None = None
     tool_choice:         str | dict[str, Any] | None = None
+    web_search:          bool | None                = None
     parallel_tool_calls: bool | None                = True
     max_tokens:          int | None                 = None
 
@@ -76,6 +77,7 @@ class ResponsesCreateRequest(BaseModel):
     max_output_tokens:    int | None            = None
     tools:                list[Any] | None      = None
     tool_choice:          Any | None            = None
+    web_search:           bool | None           = None
     previous_response_id: str | None            = None
     store:                bool | None           = None
     metadata:             dict[str, Any] | None = None

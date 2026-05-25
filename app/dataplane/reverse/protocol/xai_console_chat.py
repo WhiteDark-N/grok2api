@@ -184,6 +184,7 @@ def build_console_payload(
     if console_model in _MODELS_WITH_REASONING_FIELD:
         payload["reasoning"] = {"effort": effort}
 
+    tools_provided = tools is not None
     merged_tools: list[dict[str, Any]] = list(tools or [])
     if web_search and console_model in _MODELS_WITH_SEARCH_TOOLS:
         has_web = any(isinstance(t, dict) and t.get("type") == "web_search" for t in merged_tools)
@@ -192,7 +193,7 @@ def build_console_payload(
             merged_tools.append({"type": "web_search", "enable_image_understanding": True})
         if not has_x:
             merged_tools.append({"type": "x_search", "enable_video_understanding": True})
-    elif not merged_tools and console_model in _MODELS_WITH_SEARCH_TOOLS:
+    elif (not tools_provided) and console_model in _MODELS_WITH_SEARCH_TOOLS:
         merged_tools = [
             {"type": "web_search", "enable_image_understanding": True},
             {"type": "x_search", "enable_video_understanding": True},

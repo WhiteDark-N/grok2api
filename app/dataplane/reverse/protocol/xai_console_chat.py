@@ -185,7 +185,22 @@ def build_console_payload(
         payload["reasoning"] = {"effort": effort}
 
     tools_provided = tools is not None
-    merged_tools: list[dict[str, Any]] = list(tools or [])
+    merged_tools: list[dict[str, Any]] = []
+    for t in tools or []:
+        if not isinstance(t, dict):
+            continue
+        if t.get("type") == "function" and isinstance(t.get("function"), dict):
+            fn = t.get("function") or {}
+            merged_tools.append(
+                {
+                    "type": "function",
+                    "name": fn.get("name", ""),
+                    "description": fn.get("description", ""),
+                    "parameters": fn.get("parameters"),
+                }
+            )
+        else:
+            merged_tools.append(t)
     if web_search and console_model in _MODELS_WITH_SEARCH_TOOLS:
         has_web = any(isinstance(t, dict) and t.get("type") == "web_search" for t in merged_tools)
         has_x = any(isinstance(t, dict) and t.get("type") == "x_search" for t in merged_tools)

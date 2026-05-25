@@ -266,6 +266,8 @@ async def create(
             emit_think=emit_think,
             temperature=temperature,
             top_p=top_p,
+            tools=tools,
+            tool_choice=tool_choice,
             response_id=response_id,
             reasoning_id=reasoning_id,
             message_id=message_id,

@@ -83,6 +83,8 @@ async def create(
     emit_think: bool,
     temperature: float,
     top_p: float,
+    tools: list[dict] | None,
+    tool_choice: Any,
     response_id: str,
     reasoning_id: str,
     message_id: str,
@@ -130,6 +132,8 @@ async def create(
                         top_p=top_p,
                         reasoning_effort=effort,
                         stream=True,
+                        tools=tools,
+                        tool_choice=tool_choice,
                     )
 
                     try:
@@ -312,6 +316,8 @@ async def create(
                 top_p=top_p,
                 reasoning_effort=effort,
                 stream=True,
+                tools=tools,
+                tool_choice=tool_choice,
             )
 
             try:

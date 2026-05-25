@@ -100,6 +100,7 @@ async def completions(
     top_p: float = 0.95,
     tools: list[dict] | None = None,
     tool_choice: Any = None,
+    web_search: bool | None = None,
 ) -> dict | AsyncGenerator[str, None]:
     """Entry point for console.x.ai chat completions.
 
@@ -153,6 +154,7 @@ async def completions(
                         stream=True,
                         tools=tools,
                         tool_choice=tool_choice,
+                        web_search=web_search,
                     )
 
                     try:
@@ -268,6 +270,7 @@ async def completions(
                 stream=True,  # 始终用流式，非流式在本地聚合
                 tools=tools,
                 tool_choice=tool_choice,
+                web_search=web_search,
             )
 
             try:

@@ -217,6 +217,7 @@ async def create(
     top_p:        float,
     tools:        list[dict] | None = None,
     tool_choice:  Any = None,
+    web_search:   bool | None = None,
 ) -> dict | AsyncGenerator[str, None]:
 
     cfg     = get_config()
@@ -268,6 +269,7 @@ async def create(
             top_p=top_p,
             tools=tools,
             tool_choice=tool_choice,
+            web_search=web_search,
             response_id=response_id,
             reasoning_id=reasoning_id,
             message_id=message_id,

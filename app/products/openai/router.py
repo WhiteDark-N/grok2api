@@ -307,6 +307,7 @@ async def chat_completions_endpoint(req: ChatCompletionRequest):
                 emit_think=emit_think,
                 tools=req.tools,
                 tool_choice=req.tool_choice,
+                web_search=req.web_search,
                 temperature=req.temperature or 0.8,
                 top_p=req.top_p or 0.95,
             )
@@ -414,6 +415,7 @@ async def responses_endpoint(req: ResponsesCreateRequest):
         top_p=req.top_p or 0.95,
         tools=req.tools or None,
         tool_choice=req.tool_choice,
+        web_search=req.web_search,
     )
 
     if isinstance(result, dict):

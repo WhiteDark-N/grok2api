@@ -454,6 +454,7 @@ async def completions(
     emit_think: bool | None = None,
     tools: list[dict] | None = None,
     tool_choice: Any = None,
+    web_search: bool | None = None,
     temperature: float = 0.8,
     top_p: float = 0.95,
     request_overrides: dict | None = None,
@@ -489,6 +490,7 @@ async def completions(
             top_p=top_p,
             tools=tools,
             tool_choice=tool_choice,
+            web_search=web_search,
         )
     # ─────────────────────────────────────────────────────────────────────────
 

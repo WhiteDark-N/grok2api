@@ -85,6 +85,7 @@ async def create(
     top_p: float,
     tools: list[dict] | None,
     tool_choice: Any,
+    web_search: bool | None,
     response_id: str,
     reasoning_id: str,
     message_id: str,
@@ -134,6 +135,7 @@ async def create(
                         stream=True,
                         tools=tools,
                         tool_choice=tool_choice,
+                        web_search=web_search,
                     )
 
                     try:
@@ -318,6 +320,7 @@ async def create(
                 stream=True,
                 tools=tools,
                 tool_choice=tool_choice,
+                web_search=web_search,
             )
 
             try:

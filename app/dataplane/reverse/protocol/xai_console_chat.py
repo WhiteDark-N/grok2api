@@ -117,6 +117,7 @@ def build_console_payload(
     stream: bool = True,
     tools: list[dict[str, Any]] | None = None,
     tool_choice: Any = None,
+    web_search: bool | None = None,
 ) -> dict[str, Any]:
     """Build the JSON payload for POST console.x.ai/v1/responses.
 
@@ -183,18 +184,26 @@ def build_console_payload(
     if console_model in _MODELS_WITH_REASONING_FIELD:
         payload["reasoning"] = {"effort": effort}
 
-    # 优先透传调用方提供的 tools / tool_choice（例如 function tools）。
-    if tools:
-        payload["tools"] = tools
-        if tool_choice is not None:
-            payload["tool_choice"] = tool_choice
-    # 未显式提供 tools 时，为支持搜索的模型注入默认搜索工具。
-    elif console_model in _MODELS_WITH_SEARCH_TOOLS:
-        payload["tools"] = [
+    merged_tools: list[dict[str, Any]] = list(tools or [])
+    if web_search and console_model in _MODELS_WITH_SEARCH_TOOLS:
+        has_web = any(isinstance(t, dict) and t.get("type") == "web_search" for t in merged_tools)
+        has_x = any(isinstance(t, dict) and t.get("type") == "x_search" for t in merged_tools)
+        if not has_web:
+            merged_tools.append({"type": "web_search", "enable_image_understanding": True})
+        if not has_x:
+            merged_tools.append({"type": "x_search", "enable_video_understanding": True})
+    elif not merged_tools and console_model in _MODELS_WITH_SEARCH_TOOLS:
+        merged_tools = [
             {"type": "web_search", "enable_image_understanding": True},
             {"type": "x_search", "enable_video_understanding": True},
         ]
-        payload["tool_choice"] = "auto"
+
+    if merged_tools:
+        payload["tools"] = merged_tools
+        if tool_choice is not None:
+            payload["tool_choice"] = tool_choice
+        elif web_search:
+            payload["tool_choice"] = "auto"
 
     logger.debug(
         "console payload built: model={} console_model={} input_items={} has_reasoning={}",

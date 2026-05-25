@@ -37,6 +37,24 @@ from ._format import (
 )
 
 
+def _console_function_items(adapter: ConsoleStreamAdapter, *, start_index: int = 1) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for idx, tc in enumerate(adapter.tool_calls):
+        call_id = tc.get("id") or f"call_{idx}"
+        items.append(
+            {
+                "id": f"fc_{call_id}",
+                "type": "function_call",
+                "status": "completed",
+                "call_id": call_id,
+                "name": tc.get("name", ""),
+                "arguments": tc.get("arguments", "{}"),
+                "output_index": start_index + idx,
+            }
+        )
+    return items
+
+
 def _log_task_exception(task: "asyncio.Task") -> None:
     exc = task.exception() if not task.cancelled() else None
     if exc:
@@ -83,6 +101,9 @@ async def create(
     emit_think: bool,
     temperature: float,
     top_p: float,
+    tools: list[dict] | None,
+    tool_choice: Any,
+    web_search: bool | None,
     response_id: str,
     reasoning_id: str,
     message_id: str,
@@ -130,6 +151,9 @@ async def create(
                         top_p=top_p,
                         reasoning_effort=effort,
                         stream=True,
+                        tools=tools,
+                        tool_choice=tool_choice,
+                        web_search=web_search,
                     )
 
                     try:
@@ -222,6 +246,16 @@ async def create(
                             },
                         })
 
+                        # output_item.done (function_call)
+                        fc_items = _console_function_items(adapter)
+                        for fc in fc_items:
+                            out_idx = fc.pop("output_index")
+                            yield format_sse("response.output_item.done", {
+                                "type": "response.output_item.done",
+                                "output_index": out_idx,
+                                "item": fc,
+                            })
+
                         # usage
                         usage_data = adapter.usage
                         input_tokens = (
@@ -241,6 +275,10 @@ async def create(
                             "status": "completed",
                             "content": [{"type": "output_text", "text": full_text}],
                         }]
+                        output_items.extend(
+                            {k: v for k, v in fc.items() if k != "output_index"}
+                            for fc in fc_items
+                        )
                         yield format_sse("response.completed", {
                             "type": "response.completed",
                             "response": make_resp_object(
@@ -312,6 +350,9 @@ async def create(
                 top_p=top_p,
                 reasoning_effort=effort,
                 stream=True,
+                tools=tools,
+                tool_choice=tool_choice,
+                web_search=web_search,
             )
 
             try:
@@ -338,6 +379,10 @@ async def create(
                     "status": "completed",
                     "content": [{"type": "output_text", "text": full_text}],
                 }]
+                output_items.extend(
+                    {k: v for k, v in fc.items() if k != "output_index"}
+                    for fc in _console_function_items(adapter)
+                )
                 result = make_resp_object(
                     response_id, model, "completed", output_items,
                     usage=build_resp_usage(input_tokens, output_tokens),

@@ -225,6 +225,7 @@ def build_console_payload(
         "console payload built: model={} console_model={} input_items={} has_reasoning={}",
         model, console_model, len(input_items), console_model in _MODELS_WITH_REASONING_FIELD,
     )
+    print(payload)
     return payload
 
 

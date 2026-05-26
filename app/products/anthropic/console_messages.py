@@ -1,9 +1,12 @@
 """Console Messages API handler — /v1/messages for console.x.ai models.
 
 将 console.x.ai 上游 SSE 转换为 Anthropic Messages API 格式输出。
+Console 路径使用原生 Responses API tools（非 XML 注入），直接解析 function_call。
 """
 
 import asyncio
+import os
+import time
 from typing import Any, AsyncGenerator
 
 import orjson
@@ -31,6 +34,10 @@ def _sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {orjson.dumps(data).decode()}\n\n"
 
 
+def _make_tool_id() -> str:
+    return f"toolu_{int(time.time() * 1000)}{os.urandom(3).hex()}"
+
+
 def _log_task_exception(task: "asyncio.Task") -> None:
     exc = task.exception() if not task.cancelled() else None
     if exc:
@@ -38,7 +45,6 @@ def _log_task_exception(task: "asyncio.Task") -> None:
 
 
 async def _quota_sync(token: str, mode_id: int) -> None:
-    """Fire-and-forget: 成功调用后持久化配额扣减和 usage_use_count。"""
     try:
         if current_strategy() != "quota":
             return
@@ -55,7 +61,6 @@ async def _quota_sync(token: str, mode_id: int) -> None:
 
 
 async def _fail_sync(token: str, mode_id: int, exc: BaseException | None = None) -> None:
-    """Fire-and-forget: 失败后持久化失败计数。"""
     try:
         svc = get_refresh_service()
         if svc:
@@ -69,6 +74,19 @@ async def _fail_sync(token: str, mode_id: int, exc: BaseException | None = None)
         )
 
 
+def _build_tool_use_content(tool_call: dict[str, str]) -> dict:
+    try:
+        parsed = orjson.loads(tool_call["arguments"])
+    except (orjson.JSONDecodeError, ValueError):
+        parsed = {}
+    return {
+        "type": "tool_use",
+        "id": tool_call.get("id") or _make_tool_id(),
+        "name": tool_call["name"],
+        "input": parsed,
+    }
+
+
 async def create(
     *,
     model: str,
@@ -78,8 +96,13 @@ async def create(
     temperature: float,
     top_p: float,
     msg_id: str,
+    tools: list[dict] | None = None,
+    tool_choice: Any = None,
 ) -> dict | AsyncGenerator[str, None]:
-    """Console models /v1/messages handler (Anthropic format)."""
+    """Console models /v1/messages handler (Anthropic format).
+
+    tools 以原生 Responses API 格式传入，解析 function_call 输出为 Anthropic tool_use 块。
+    """
 
     cfg = get_config()
     spec = resolve_model(model)
@@ -120,6 +143,8 @@ async def create(
                         top_p=top_p,
                         reasoning_effort=effort,
                         stream=True,
+                        tools=tools,
+                        tool_choice=tool_choice,
                     )
 
                     try:
@@ -138,18 +163,19 @@ async def create(
                         })
                         yield _sse("ping", {"type": "ping"})
 
-                        # content_block_start
-                        yield _sse("content_block_start", {
-                            "type": "content_block_start",
-                            "index": 0,
-                            "content_block": {"type": "text", "text": ""},
-                        })
-
+                        text_block_started = False
                         async for event_type, data in stream_console_chat(
                             token, payload, timeout_s=timeout_s
                         ):
                             tokens = adapter.feed(event_type, data)
                             for tok in tokens:
+                                if not text_block_started:
+                                    text_block_started = True
+                                    yield _sse("content_block_start", {
+                                        "type": "content_block_start",
+                                        "index": 0,
+                                        "content_block": {"type": "text", "text": ""},
+                                    })
                                 text_buf.append(tok)
                                 yield _sse("content_block_delta", {
                                     "type": "content_block_delta",
@@ -157,32 +183,79 @@ async def create(
                                     "delta": {"type": "text_delta", "text": tok},
                                 })
 
-                        # content_block_stop
-                        yield _sse("content_block_stop", {
-                            "type": "content_block_stop",
-                            "index": 0,
-                        })
+                        usage_data = adapter.usage
 
-                        # message_delta
-                        full_text = "".join(text_buf)
-                        output_tokens = (
-                            adapter.usage.get("output_tokens", 0) if adapter.usage
-                            else estimate_tokens(full_text)
-                        )
-                        yield _sse("message_delta", {
-                            "type": "message_delta",
-                            "delta": {"stop_reason": "end_turn", "stop_sequence": None},
-                            "usage": {"output_tokens": output_tokens},
-                        })
+                        if adapter.tool_calls:
+                            if text_block_started:
+                                yield _sse("content_block_stop", {
+                                    "type": "content_block_stop",
+                                    "index": 0,
+                                })
+                            block_index = 1 if text_block_started else 0
+                            for idx, tc in enumerate(adapter.tool_calls):
+                                bi = block_index + idx
+                                yield _sse("content_block_start", {
+                                    "type": "content_block_start",
+                                    "index": bi,
+                                    "content_block": {
+                                        "type": "tool_use",
+                                        "id": tc.get("id") or _make_tool_id(),
+                                        "name": tc["name"],
+                                        "input": {},
+                                    },
+                                })
+                                yield _sse("content_block_delta", {
+                                    "type": "content_block_delta",
+                                    "index": bi,
+                                    "delta": {
+                                        "type": "input_json_delta",
+                                        "partial_json": tc["arguments"],
+                                    },
+                                })
+                                yield _sse("content_block_stop", {
+                                    "type": "content_block_stop",
+                                    "index": bi,
+                                })
+
+                            full_text = "".join(text_buf)
+                            output_tokens = (
+                                usage_data.get("output_tokens", 0) if usage_data
+                                else estimate_tokens(full_text)
+                            )
+                            yield _sse("message_delta", {
+                                "type": "message_delta",
+                                "delta": {"stop_reason": "tool_use", "stop_sequence": None},
+                                "usage": {"output_tokens": output_tokens},
+                            })
+                            logger.info(
+                                "console messages stream tool_calls: model={} calls={} attempt={}/{}",
+                                model, len(adapter.tool_calls), attempt + 1, max_retries + 1,
+                            )
+                        else:
+                            if text_block_started:
+                                yield _sse("content_block_stop", {
+                                    "type": "content_block_stop",
+                                    "index": 0,
+                                })
+                            full_text = "".join(text_buf)
+                            output_tokens = (
+                                usage_data.get("output_tokens", 0) if usage_data
+                                else estimate_tokens(full_text)
+                            )
+                            yield _sse("message_delta", {
+                                "type": "message_delta",
+                                "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+                                "usage": {"output_tokens": output_tokens},
+                            })
+                            logger.info(
+                                "console messages stream completed: model={} text_len={} attempt={}/{}",
+                                model, len(full_text), attempt + 1, max_retries + 1,
+                            )
 
                         # message_stop
                         yield _sse("message_stop", {"type": "message_stop"})
                         yield "data: [DONE]\n\n"
                         success = True
-                        logger.info(
-                            "console messages stream completed: model={} text_len={} attempt={}/{}",
-                            model, len(full_text), attempt + 1, max_retries + 1,
-                        )
 
                     except UpstreamError as exc:
                         fail_exc = exc
@@ -241,6 +314,8 @@ async def create(
                 top_p=top_p,
                 reasoning_effort=effort,
                 stream=True,
+                tools=tools,
+                tool_choice=tool_choice,
             )
 
             try:
@@ -249,35 +324,59 @@ async def create(
                 ):
                     adapter.feed(event_type, data)
 
-                full_text = adapter.full_text
                 usage_data = adapter.usage
                 input_tokens = (
                     usage_data.get("input_tokens", 0) if usage_data
                     else estimate_prompt_tokens(messages)
                 )
-                output_tokens = (
-                    usage_data.get("output_tokens", 0) if usage_data
-                    else estimate_tokens(full_text)
-                )
 
-                result = {
-                    "id": msg_id,
-                    "type": "message",
-                    "role": "assistant",
-                    "model": model,
-                    "content": [{"type": "text", "text": full_text}],
-                    "stop_reason": "end_turn",
-                    "stop_sequence": None,
-                    "usage": {
-                        "input_tokens": input_tokens,
-                        "output_tokens": output_tokens,
-                    },
-                }
+                if adapter.tool_calls:
+                    content = [_build_tool_use_content(tc) for tc in adapter.tool_calls]
+                    output_tokens = (
+                        usage_data.get("output_tokens", 0) if usage_data
+                        else estimate_tokens("".join(adapter.text_buf))
+                    )
+                    result = {
+                        "id": msg_id,
+                        "type": "message",
+                        "role": "assistant",
+                        "model": model,
+                        "content": content,
+                        "stop_reason": "tool_use",
+                        "stop_sequence": None,
+                        "usage": {
+                            "input_tokens": input_tokens,
+                            "output_tokens": output_tokens,
+                        },
+                    }
+                    logger.info(
+                        "console messages non-stream tool_calls: model={} calls={}",
+                        model, len(adapter.tool_calls),
+                    )
+                else:
+                    full_text = adapter.full_text
+                    output_tokens = (
+                        usage_data.get("output_tokens", 0) if usage_data
+                        else estimate_tokens(full_text)
+                    )
+                    result = {
+                        "id": msg_id,
+                        "type": "message",
+                        "role": "assistant",
+                        "model": model,
+                        "content": [{"type": "text", "text": full_text}],
+                        "stop_reason": "end_turn",
+                        "stop_sequence": None,
+                        "usage": {
+                            "input_tokens": input_tokens,
+                            "output_tokens": output_tokens,
+                        },
+                    }
+                    logger.info(
+                        "console messages non-stream completed: model={} text_len={}",
+                        model, len(full_text),
+                    )
                 success = True
-                logger.info(
-                    "console messages non-stream completed: model={} text_len={}",
-                    model, len(full_text),
-                )
                 return result
 
             except UpstreamError as exc:

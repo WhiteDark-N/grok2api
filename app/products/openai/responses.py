@@ -233,16 +233,6 @@ async def create(
     if not message.strip():
         raise UpstreamError("Empty message after extraction", status=400)
 
-    # Tool prompt injection — only modify the message text, never the Grok payload
-    # Normalise to Chat Completions format first (Responses API uses a flat structure)
-    tool_names: list[str] = []
-    if tools:
-        chat_tools = _to_chat_tools(tools)
-        tool_names = extract_tool_names(chat_tools)
-        tool_prompt = build_tool_system_prompt(chat_tools, tool_choice)
-        message = inject_into_message(message, tool_prompt)
-        logger.info("responses tool injection: tool_names={} choice={}", tool_names, tool_choice)
-
     from app.dataplane.account import _directory as _acct_dir
     if _acct_dir is None:
         raise RateLimitError("Account directory not initialised")
@@ -256,7 +246,7 @@ async def create(
     timeout_s    = cfg.get_float("chat.timeout", 120.0)
 
     # -------------------------------------------------------------------------
-    # Console 模型路由 — 走 console.x.ai/v1/responses，输出转为 Responses API 格式
+    # Console 模型路由 — 走 console.x.ai/v1/responses，原生 tools 格式，严禁 XML 注入
     # -------------------------------------------------------------------------
     if spec.is_console_chat():
         from .console_responses import create as console_responses_create
@@ -274,6 +264,15 @@ async def create(
             reasoning_id=reasoning_id,
             message_id=message_id,
         )
+
+    # Tool prompt injection (XML, 仅非 console / grok.com 付费路径)
+    tool_names: list[str] = []
+    if tools:
+        chat_tools = _to_chat_tools(tools)
+        tool_names = extract_tool_names(chat_tools)
+        tool_prompt = build_tool_system_prompt(chat_tools, tool_choice)
+        message = inject_into_message(message, tool_prompt)
+        logger.info("responses tool injection: tool_names={} choice={}", tool_names, tool_choice)
 
     # -------------------------------------------------------------------------
     # Streaming (grok.com path)

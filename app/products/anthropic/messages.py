@@ -294,17 +294,6 @@ async def create(
     if not internal_message.strip():
         raise UpstreamError("Empty message after extraction", status=400)
 
-    # Tool injection
-    tool_names: list[str] = []
-    internal_tool_choice: Any = None
-    if tools:
-        chat_tools       = _convert_tools(tools)
-        tool_names       = extract_tool_names(chat_tools)
-        internal_tool_choice = _convert_tool_choice(tool_choice)
-        tool_prompt      = build_tool_system_prompt(chat_tools, internal_tool_choice)
-        internal_message = inject_into_message(internal_message, tool_prompt)
-        logger.info("messages tool injection: tool_names={} choice={}", tool_names, internal_tool_choice)
-
     from app.dataplane.account import _directory as _acct_dir
     if _acct_dir is None:
         raise RateLimitError("Account directory not initialised")
@@ -316,7 +305,7 @@ async def create(
     msg_id      = _make_msg_id()
 
     # -------------------------------------------------------------------------
-    # Console 模型路由 — 走 console.x.ai，输出转为 Anthropic Messages 格式
+    # Console 模型路由 — 走 console.x.ai，原生 tools 格式
     # -------------------------------------------------------------------------
     if spec.is_console_chat():
         from .console_messages import create as console_messages_create
@@ -328,7 +317,20 @@ async def create(
             temperature=temperature,
             top_p=top_p,
             msg_id=msg_id,
+            tools=_convert_tools(tools) if tools else None,
+            tool_choice=_convert_tool_choice(tool_choice) if tools else None,
         )
+
+    # Tool injection (XML, 仅非 console / grok.com 付费路径)
+    tool_names: list[str] = []
+    internal_tool_choice: Any = None
+    if tools:
+        chat_tools       = _convert_tools(tools)
+        tool_names       = extract_tool_names(chat_tools)
+        internal_tool_choice = _convert_tool_choice(tool_choice)
+        tool_prompt      = build_tool_system_prompt(chat_tools, internal_tool_choice)
+        internal_message = inject_into_message(internal_message, tool_prompt)
+        logger.info("messages tool injection: tool_names={} choice={}", tool_names, internal_tool_choice)
 
     # -------------------------------------------------------------------------
     # Streaming (grok.com path)

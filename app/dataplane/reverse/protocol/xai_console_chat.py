@@ -123,6 +123,8 @@ def build_console_payload(
 
     将 OpenAI messages 格式转换为 Responses API input 格式。
     """
+
+    print(f"[build_console_payload] 参数: messages={messages}, model={model}, temperature={temperature}, top_p={top_p}, reasoning_effort={reasoning_effort}, stream={stream}, tools={tools}, tool_choice={tool_choice}, web_search={web_search}")
     # 转换 messages → input 数组
     input_items: list[dict[str, Any]] = []
     for msg in messages:
@@ -225,7 +227,7 @@ def build_console_payload(
         "console payload built: model={} console_model={} input_items={} has_reasoning={}",
         model, console_model, len(input_items), console_model in _MODELS_WITH_REASONING_FIELD,
     )
-    # print(payload)
+    print(payload)
     return payload
 
 
